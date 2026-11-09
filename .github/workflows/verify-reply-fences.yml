@@ -1,4 +1,4 @@
-name: Compare reply-fence verification with upstream
+name: Isolate the Cloud guest shell failure
 on:
   push:
     branches: [verify/reply-table-fences-linux]
@@ -8,22 +8,12 @@ jobs:
   compare:
     runs-on: ubuntu-latest
     timeout-minutes: 12
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: upstream
-            sha: 1de1164d5040d8699f55e0907552270bd9fbd38f
-          - name: patch
-            sha: 84b4b08992590a825250e099ea11e6d99f530f47
-    name: compare (${{ matrix.name }})
     env:
       CI: "true"
-      OMB_VITEST_WORKERS: "4"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: ${{ matrix.sha }}
+          fetch-depth: 3
           persist-credentials: false
       - uses: pnpm/action-setup@ff378ebe6b225b0680b81c1ad4498ae0d1d3a5e3
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
@@ -31,11 +21,21 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: node --input-type=commonjs -e "require('electron')"
-      - if: matrix.name == 'patch'
-        run: pnpm exec vitest run src/lib/formatted-reply.test.ts src/components/RichTable.fit.test.ts server/drivers/chat-mcp-tools.test.ts
-      - if: matrix.name == 'patch'
-        run: pnpm typecheck && pnpm broker:test && pnpm test:electron && pnpm test:packaged-server
-      - if: always()
-        run: pnpm exec vitest run server/engine-homes/box.linux.test.ts server/cloud-guest-shell.e2e.test.ts server/bot-api-team.e2e.test.ts server/cloud-team-open-reach.e2e.test.ts
+      - name: Alternate upstream and patch on one runner
+        run: |
+          base=1de1164d5040d8699f55e0907552270bd9fbd38f
+          patch=84b4b08992590a825250e099ea11e6d99f530f47
+          git fetch --no-tags --depth=2 origin "$patch"
+          status=0
+          for commit in "$base" "$patch" "$patch" "$base"; do
+            git checkout --detach "$commit"
+            printf '\nTesting %s\n' "$commit"
+            if pnpm exec vitest run server/cloud-guest-shell.e2e.test.ts -t "no engine a bot runs finds"; then
+              printf 'RESULT %s PASS\n' "$commit"
+            else
+              printf 'RESULT %s FAIL\n' "$commit"
+              status=1
+            fi
+          done
+          exit "$status"
 
